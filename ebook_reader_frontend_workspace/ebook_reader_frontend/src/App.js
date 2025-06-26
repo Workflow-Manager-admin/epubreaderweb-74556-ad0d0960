@@ -99,6 +99,40 @@ function App() {
         if (!contents.document.body) return;
         contents.document.body.style.background = "var(--bg-primary)";
         contents.document.body.style.color = "var(--text-primary)";
+
+        // Inject keyboard listener into iframe, so arrow keys and spacebar work
+        // even when focus is inside the ebook iframe
+        const keyHandler = (e) => {
+          // Don't intercept while editing text/selecting (inputs etc) inside iframe
+          const tag = contents.document.activeElement && contents.document.activeElement.tagName;
+          if (tag === "INPUT" || tag === "TEXTAREA") return;
+          if (
+            e.code === "Space" ||
+            e.key === " " || 
+            e.key === "Spacebar" || 
+            e.key === "ArrowRight"
+          ) {
+            e.preventDefault();
+            // Call next page (communicate with parent)
+            window.requestAnimationFrame(() => {
+              r.next();
+            });
+          } else if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            window.requestAnimationFrame(() => {
+              r.prev();
+            });
+          }
+        };
+        // Remove any previous handler before adding
+        contents.document.removeEventListener("keydown", keyHandler);
+        contents.document.addEventListener("keydown", keyHandler, { capture: true });
+
+        // Support for re-adding handler if iframe reloads content
+        contents.window.addEventListener("focus", function() {
+          contents.document.removeEventListener("keydown", keyHandler);
+          contents.document.addEventListener("keydown", keyHandler, { capture: true });
+        });
       });
 
       // Handle location change for navigation, bookmarks, analytics
@@ -469,13 +503,53 @@ function App() {
               </div>
 
               {/* Enhance the reading area to support mouse and keyboard navigation */}
+
               <div
                 className="main-reader"
                 ref={mainAreaRef}
                 tabIndex={0}
                 aria-label="Book reading area"
-                style={{ outline: "none" }}
-              />
+                style={{ outline: "none", position: "relative" }}
+              >
+                {/* Transparent overlay for mouse paging, full height/width of reading area */}
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    height: "100%",
+                    zIndex: 20,
+                    pointerEvents: "auto",
+                    background: "transparent",
+                  }}
+                  aria-hidden="true"
+                  onClick={e => {
+                    if (!mainAreaRef.current) return;
+                    const area = mainAreaRef.current;
+                    const rect = area.getBoundingClientRect();
+                    const x = e.clientX;
+                    const y = e.clientY;
+                    if (
+                      x < rect.left ||
+                      x > rect.right ||
+                      y < rect.top ||
+                      y > rect.bottom
+                    ) return;
+
+                    const relativeX = x - rect.left;
+                    const midpoint = rect.width / 2;
+                    const sidePadding = Math.max(24, 0.08 * rect.width);
+
+                    if (relativeX < midpoint - sidePadding) {
+                      rendition && rendition.prev();
+                    } else if (relativeX > midpoint + sidePadding) {
+                      rendition && rendition.next();
+                    }
+                    // Clicking the center region does nothing
+                  }}
+                />
+              </div>
               {/* Search results overlay */}
               {(searchQuery && searchResults.length > 0) && (
                 <div className="search-results">

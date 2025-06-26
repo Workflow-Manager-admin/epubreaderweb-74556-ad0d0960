@@ -259,6 +259,7 @@
   padding: 18px 0 18px 0;
   border-radius: 0;
   outline: none;
+  position: relative; /* For overlay support */
 }
 .main-placeholder {
   text-align: center;
