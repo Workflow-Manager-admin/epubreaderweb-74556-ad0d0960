@@ -251,20 +251,32 @@ function App() {
   async function handleSearch(query) {
     setSearchQuery(query);
     setSearchResults([]);
-    if (!book || !query) return;
+    if (!book || !query) {
+      console.log("[SEARCH] Book is missing or query is empty");
+      return;
+    }
     const results = [];
     const normalizedQuery = query.trim().toLowerCase();
-    // Make sure all spineItems are searched and text extraction respects async logic
+
+    // Debug: print all spine information before search
+    if (!book.spine || !book.spine.spineItems || book.spine.spineItems.length === 0) {
+      console.warn("[SEARCH] No spine items loaded in book.");
+      return;
+    }
+    console.log(`[SEARCH] Book has ${book.spine.spineItems.length} spine items. Starting extraction for query='${normalizedQuery}'`);
+
     for (let i = 0; i < book.spine.spineItems.length; ++i) {
       const spineItem = book.spine.spineItems[i];
       let text = "";
       try {
-        // Load spine item and get raw HTML, then strip HTML tags to make searching more robust
+        console.log(`[SEARCH] Loading spineItem [${i}] href=${spineItem.href}, id=${spineItem.idref}`);
         await spineItem.load(book.load.bind(book));
         let raw = "";
+
         try {
           raw = await spineItem.contents.text();
-        } catch {
+          console.log(`[SEARCH] Raw HTML/Text extracted for spine [${i}] (length=${raw?.length}): sample='${(raw||"").substr(0,120)}'`);
+        } catch (innerErr) {
           // In case .contents.text() fails, fallback to .contents.documentElement.textContent
           if (
             spineItem.contents &&
@@ -272,17 +284,31 @@ function App() {
             spineItem.contents.document.documentElement
           ) {
             raw = spineItem.contents.document.documentElement.textContent || "";
+            console.warn(`[SEARCH] Used .documentElement.textContent for spine [${i}]; length=${raw.length}`);
+          } else {
+            console.error(`[SEARCH] Both .contents.text() and .documentElement failed for spine [${i}]`);
           }
         }
+
         text = (typeof raw === "string" ? raw : "").replace(/<[^>]+>/g, " ");
+
+        // Print info about non-empty/empty
+        if (!text || text.trim().length === 0) {
+          console.warn(`[SEARCH] Extracted text is empty for spine [${i}] (${spineItem.href})`);
+        } else {
+          console.log(`[SEARCH] Cleaned text for spine [${i}] (length=${text.length}): '${text.substring(0,120)}...'`);
+        }
+
         // Search all occurrences, not just first
         let idx = 0;
         let offset = 0;
         let found = false;
+        let occur = 0;
         while (
           (idx = text.toLowerCase().indexOf(normalizedQuery, offset)) !== -1
         ) {
           found = true;
+          ++occur;
           // Provide snippet (show some context around match)
           const snippet = text.substring(
             Math.max(0, idx - 40),
@@ -297,12 +323,23 @@ function App() {
           });
           offset = idx + normalizedQuery.length;
         }
+        if (found) {
+          console.log(`[SEARCH] Found ${occur} occurrence(s) of '${normalizedQuery}' in spine [${i}]`);
+        } else {
+          console.log(`[SEARCH] No occurrences for '${normalizedQuery}' in spine [${i}]`);
+        }
         spineItem.unload();
       } catch (e) {
         // Ensure the spine is unloaded on error too
         try { spineItem.unload(); } catch {}
+        console.error(`[SEARCH] Error processing spine [${i}] (${spineItem?.href}):`, e);
         continue; // skip this spineItem on error loading/extracting
       }
+    }
+    if (results.length === 0) {
+      console.warn(`[SEARCH] Finished. No results found for query '${normalizedQuery}'.`);
+    } else {
+      console.log(`[SEARCH] Finished. Found total ${results.length} results for query '${normalizedQuery}'`);
     }
     setSearchResults(results);
   }
