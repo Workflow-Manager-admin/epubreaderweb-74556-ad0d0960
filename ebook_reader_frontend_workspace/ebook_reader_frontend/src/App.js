@@ -142,6 +142,13 @@ function App() {
     }
   }, [book]);
 
+  // Autofocus mainArea on book load for keyboard navigation
+  useEffect(() => {
+    if (book && mainAreaRef.current) {
+      mainAreaRef.current.focus();
+    }
+  }, [book]);
+
   // PUBLIC_INTERFACE
   function handleSetTheme(newTheme) {
     setTheme(newTheme);
@@ -258,6 +265,70 @@ function App() {
     setSearchResults([]);
     setSearchQuery("");
   }
+
+  // Add document-level keyboard and click support for paging
+  useEffect(() => {
+    if (!book || !rendition) return;
+
+    function handleDocKeyDown(e) {
+      // Don't interfere with typing in inputs/textareas/search box
+      const tag = document.activeElement && document.activeElement.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+
+      if (
+        e.code === "Space" ||
+        e.key === " " ||
+        e.key === "Spacebar" ||
+        e.key === "ArrowRight"
+      ) {
+        e.preventDefault();
+        rendition.next();
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        rendition.prev();
+      }
+    }
+
+    function handleDocClick(e) {
+      // Restrict click-to-page to the main reading area only, not in overlays
+      if (!mainAreaRef.current) return;
+      const area = mainAreaRef.current;
+      if (!area.contains(e.target)) return;
+
+      const rect = area.getBoundingClientRect();
+      const x = e.clientX;
+      const y = e.clientY;
+      // Only consider clicks within the main reading box
+      if (
+        x < rect.left ||
+        x > rect.right ||
+        y < rect.top ||
+        y > rect.bottom
+      )
+        return;
+
+      const relativeX = x - rect.left;
+      const midpoint = rect.width / 2;
+      const sidePadding = Math.max(24, 0.08 * rect.width);
+
+      if (relativeX < midpoint - sidePadding) {
+        rendition.prev();
+      } else if (relativeX > midpoint + sidePadding) {
+        rendition.next();
+      }
+      // Center region: do nothing
+    }
+
+    document.addEventListener("keydown", handleDocKeyDown);
+    document.addEventListener("click", handleDocClick);
+
+    // Cleanup
+    return () => {
+      document.removeEventListener("keydown", handleDocKeyDown);
+      document.removeEventListener("click", handleDocClick);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [book, rendition, mainAreaRef.current]);
 
   // UI RENDER --------------------------
   return (
@@ -403,41 +474,6 @@ function App() {
                 ref={mainAreaRef}
                 tabIndex={0}
                 aria-label="Book reading area"
-                onClick={e => {
-                  // Only respond if a book is loaded and the rendition is ready
-                  if (!book || !rendition || !mainAreaRef.current) return;
-
-                  const area = mainAreaRef.current;
-                  const rect = area.getBoundingClientRect();
-                  const relativeX = e.clientX - rect.left;
-                  const midpoint = rect.width / 2;
-
-                  // Padding to allow easy clicking at the edge
-                  const sidePadding = Math.max(24, 0.08 * rect.width);
-
-                  if (relativeX < midpoint - sidePadding) {
-                    // Clicked left
-                    rendition.prev();
-                  } else if (relativeX > midpoint + sidePadding) {
-                    // Clicked right
-                    rendition.next();
-                  }
-                  // If click is right in the central region -- do nothing.
-                }}
-                onKeyDown={e => {
-                  if (!book || !rendition) return;
-                  // Space/Right-arrow = next page. Left-arrow = previous page.
-                  // If search input or another input is focused, don't interfere.
-                  const tag = document.activeElement && document.activeElement.tagName;
-                  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-                  if (e.code === 'Space' || e.key === ' ' || e.key === 'Spacebar' || e.key === 'ArrowRight') {
-                    e.preventDefault();
-                    rendition.next();
-                  } else if (e.key === 'ArrowLeft') {
-                    e.preventDefault();
-                    rendition.prev();
-                  }
-                }}
                 style={{ outline: "none" }}
               />
               {/* Search results overlay */}
