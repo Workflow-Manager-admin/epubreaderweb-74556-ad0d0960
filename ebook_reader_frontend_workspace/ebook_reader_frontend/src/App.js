@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import "./App.css";
 import { FaMoon, FaSun, FaSearch, FaBookmark, FaRegBookmark, FaUpload } from "react-icons/fa";
-import * as ePub from "epubjs";
+import ePub from "epubjs";
 import Fuse from "fuse.js";
 
 // PUBLIC_INTERFACE
