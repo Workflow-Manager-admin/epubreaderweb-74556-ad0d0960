@@ -397,7 +397,49 @@ function App() {
                 </button>
               </div>
 
-              <div className="main-reader" ref={mainAreaRef} tabIndex={0} aria-label="Book reading area" />
+              {/* Enhance the reading area to support mouse and keyboard navigation */}
+              <div
+                className="main-reader"
+                ref={mainAreaRef}
+                tabIndex={0}
+                aria-label="Book reading area"
+                onClick={e => {
+                  // Only respond if a book is loaded and the rendition is ready
+                  if (!book || !rendition || !mainAreaRef.current) return;
+
+                  const area = mainAreaRef.current;
+                  const rect = area.getBoundingClientRect();
+                  const relativeX = e.clientX - rect.left;
+                  const midpoint = rect.width / 2;
+
+                  // Padding to allow easy clicking at the edge
+                  const sidePadding = Math.max(24, 0.08 * rect.width);
+
+                  if (relativeX < midpoint - sidePadding) {
+                    // Clicked left
+                    rendition.prev();
+                  } else if (relativeX > midpoint + sidePadding) {
+                    // Clicked right
+                    rendition.next();
+                  }
+                  // If click is right in the central region -- do nothing.
+                }}
+                onKeyDown={e => {
+                  if (!book || !rendition) return;
+                  // Space/Right-arrow = next page. Left-arrow = previous page.
+                  // If search input or another input is focused, don't interfere.
+                  const tag = document.activeElement && document.activeElement.tagName;
+                  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+                  if (e.code === 'Space' || e.key === ' ' || e.key === 'Spacebar' || e.key === 'ArrowRight') {
+                    e.preventDefault();
+                    rendition.next();
+                  } else if (e.key === 'ArrowLeft') {
+                    e.preventDefault();
+                    rendition.prev();
+                  }
+                }}
+                style={{ outline: "none" }}
+              />
               {/* Search results overlay */}
               {(searchQuery && searchResults.length > 0) && (
                 <div className="search-results">
