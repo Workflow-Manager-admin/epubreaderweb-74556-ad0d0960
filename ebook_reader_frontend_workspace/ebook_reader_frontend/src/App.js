@@ -258,90 +258,200 @@ function App() {
     const results = [];
     const normalizedQuery = query.trim().toLowerCase();
 
-    // Debug: print all spine information before search
+    // Step 1: Deep debug - Ensure ALL chapters (spine items) are loaded and text is concatenated, gather total text stats.
     if (!book.spine || !book.spine.spineItems || book.spine.spineItems.length === 0) {
       console.warn("[SEARCH] No spine items loaded in book.");
+      // For UI diagnostics:
+      setSearchResults([{ snippet: "[DEBUG] No book spine items loaded." }]);
       return;
     }
-    console.log(`[SEARCH] Book has ${book.spine.spineItems.length} spine items. Starting extraction for query='${normalizedQuery}'`);
+    console.log(`[SEARCH] Book has ${book.spine.spineItems.length} spine items. Extracting all text for query='${normalizedQuery}'`);
+  
+    let allSpineText = "";
+    let spineChunkMeta = [];
+    let allSpineRaw = [];
 
     for (let i = 0; i < book.spine.spineItems.length; ++i) {
       const spineItem = book.spine.spineItems[i];
       let text = "";
       try {
-        console.log(`[SEARCH] Loading spineItem [${i}] href=${spineItem.href}, id=${spineItem.idref}`);
+        console.log(`[SEARCH] [${i}] Loading spineItem, href=${spineItem.href}, id=${spineItem.idref}`);
         await spineItem.load(book.load.bind(book));
         let raw = "";
 
         try {
+          // Try epubjs `text()` method
           raw = await spineItem.contents.text();
-          console.log(`[SEARCH] Raw HTML/Text extracted for spine [${i}] (length=${raw?.length}): sample='${(raw||"").substr(0,120)}'`);
+          console.log(`[SEARCH] [${i}] .contents.text() (len=${raw?.length}): '${(raw||"").slice(0,100)}...'`);
         } catch (innerErr) {
-          // In case .contents.text() fails, fallback to .contents.documentElement.textContent
+          // Fallback
           if (
             spineItem.contents &&
             spineItem.contents.document &&
             spineItem.contents.document.documentElement
           ) {
             raw = spineItem.contents.document.documentElement.textContent || "";
-            console.warn(`[SEARCH] Used .documentElement.textContent for spine [${i}]; length=${raw.length}`);
+            console.warn(`[SEARCH] [${i}] .documentElement.textContent fallback (len=${raw.length})`);
           } else {
-            console.error(`[SEARCH] Both .contents.text() and .documentElement failed for spine [${i}]`);
+            console.error(`[SEARCH] [${i}] Failed: both .contents.text() and .documentElement`);
           }
         }
 
+        allSpineRaw.push(raw.slice(0, 220)); // For UI sample
         text = (typeof raw === "string" ? raw : "").replace(/<[^>]+>/g, " ");
 
-        // Print info about non-empty/empty
         if (!text || text.trim().length === 0) {
-          console.warn(`[SEARCH] Extracted text is empty for spine [${i}] (${spineItem.href})`);
+          console.warn(`[SEARCH] [${i}] Cleaned text is empty (${spineItem.href})`);
         } else {
-          console.log(`[SEARCH] Cleaned text for spine [${i}] (length=${text.length}): '${text.substring(0,120)}...'`);
+          console.log(`[SEARCH] [${i}] Cleaned (len=${text.length}): '${text.substring(0,60).replace(/\\s+/g," ")}...'`);
         }
-
-        // Search all occurrences, not just first
-        let idx = 0;
-        let offset = 0;
-        let found = false;
-        let occur = 0;
-        while (
-          (idx = text.toLowerCase().indexOf(normalizedQuery, offset)) !== -1
-        ) {
-          found = true;
-          ++occur;
-          // Provide snippet (show some context around match)
-          const snippet = text.substring(
-            Math.max(0, idx - 40),
-            Math.min(text.length, idx + normalizedQuery.length + 40)
-          );
-          results.push({
-            i,
-            href: spineItem.href,
-            // Included cfi of this location
-            cfi: spineItem.cfiBase,
-            snippet,
-          });
-          offset = idx + normalizedQuery.length;
-        }
-        if (found) {
-          console.log(`[SEARCH] Found ${occur} occurrence(s) of '${normalizedQuery}' in spine [${i}]`);
-        } else {
-          console.log(`[SEARCH] No occurrences for '${normalizedQuery}' in spine [${i}]`);
-        }
-        spineItem.unload();
+        allSpineText += (text||"") + "\n";
+        spineChunkMeta.push({ index: i, href: spineItem.href, len: text.length });
+        await spineItem.unload();
       } catch (e) {
-        // Ensure the spine is unloaded on error too
         try { spineItem.unload(); } catch {}
-        console.error(`[SEARCH] Error processing spine [${i}] (${spineItem?.href}):`, e);
-        continue; // skip this spineItem on error loading/extracting
+        console.error(`[SEARCH] [${i}] Error processing '${spineItem?.href}':`, e);
+        spineChunkMeta.push({ index: i, href: spineItem.href, len: "ERROR" });
       }
     }
-    if (results.length === 0) {
-      console.warn(`[SEARCH] Finished. No results found for query '${normalizedQuery}'.`);
-    } else {
-      console.log(`[SEARCH] Finished. Found total ${results.length} results for query '${normalizedQuery}'`);
+    console.log(`[SEARCH] [SUM] All chapter text extracted, allSpineText length: ${allSpineText.length}`, spineChunkMeta);
+
+    // Surface debug info in the UI if search is in debug mode (query '!!debug' or startswith)
+    if (normalizedQuery === "!!debug" || normalizedQuery.startsWith("!!debug")) {
+      setSearchResults([
+        {
+          snippet:
+            "[DEBUG] " +
+            `Total chapters: ${spineChunkMeta.length}, All text length: ${allSpineText.length}\n` +
+            "Chunk lens: " +
+            JSON.stringify(spineChunkMeta) +
+            "\nSample: " +
+            (allSpineText.substring(0, 330) || "[N/A]"),
+        },
+        {
+          snippet:
+            "[RAW] First raw spine chunk (HTML, may include markup):\n" +
+            (allSpineRaw[0] || "[N/A]"),
+        },
+      ]);
+      return;
     }
-    setSearchResults(results);
+
+    // Step 2: LOG FUSE SEARCH
+    // Build array of text chunks for Fuse, one per spine/chapter
+    const spineChunksArr = [];
+    let chunkMapping = [];
+    let offset = 0;
+    for (let i = 0; i < book.spine.spineItems.length; ++i) {
+      // Re-extract (could optimize)
+      let chunk = "";
+      try {
+        const si = book.spine.spineItems[i];
+        await si.load(book.load.bind(book));
+        let raw = "";
+        try {
+          raw = await si.contents.text();
+        } catch {
+          if (
+            si.contents &&
+            si.contents.document &&
+            si.contents.document.documentElement
+          )
+            raw = si.contents.document.documentElement.textContent || "";
+        }
+        chunk = (typeof raw === "string" ? raw : "").replace(/<[^>]+>/g, " ");
+        await si.unload();
+      } catch {
+        chunk = "";
+      }
+      spineChunksArr.push(chunk);
+      chunkMapping.push({ index: i, href: book.spine.spineItems[i]?.href, base: book.spine.spineItems[i]?.cfiBase, strLen: chunk.length });
+    }
+    // Give UI/console insight into total loaded data and chunking
+    console.log("[SEARCH] FUSE data structure:", chunkMapping);
+
+    // Step 3: FUSE.JS SEARCH (Word fuzz/index match)
+    let fuseResults = [];
+    if (spineChunksArr.filter(Boolean).length === 0) {
+      console.warn("[SEARCH][FUSE] All chunked chapter data is empty -- check extraction.");
+    } else {
+      const docs = spineChunksArr.map((chunk, i) => ({
+        index: i,
+        text: chunk || "",
+        href: book.spine.spineItems[i]?.href,
+        cfi: book.spine.spineItems[i]?.cfiBase,
+      }));
+
+      const fuse = new Fuse(docs, {
+        keys: ["text"],
+        includeMatches: true,
+        minMatchCharLength: 3,
+        threshold: 0.3,
+        useExtendedSearch: true,
+      });
+      fuseResults = fuse.search(query || "");
+      console.log("[SEARCH] FUSE found", fuseResults.length, "results. Sample:", fuseResults.slice(0, 3));
+      
+      // For every Fuse result, extract match context
+      for (const hit of fuseResults) {
+        let snippet = "";
+        if (hit.matches && hit.matches[0]?.indices?.[0]) {
+          const [start, end] = hit.matches[0].indices[0];
+          snippet =
+            (hit.item.text || "").substring(Math.max(0, start - 30), Math.min(end + 40, hit.item.text.length));
+        }
+        results.push({
+          i: hit.item.index,
+          method: "fuse",
+          href: hit.item.href, 
+          cfi: hit.item.cfi,
+          snippet,
+        });
+      }
+    }
+
+    // Step 4: FALLBACK - DIRECT STRING SEARCH (indexOf, cross-check)
+    let manualResults = [];
+    for (let i = 0; i < spineChunksArr.length; ++i) {
+      const txt = spineChunksArr[i] || "";
+      let idx = 0;
+      let offset = 0;
+      let occur = 0;
+      let chunkHits = [];
+      while (
+        (idx = txt.toLowerCase().indexOf(normalizedQuery, offset)) !== -1
+      ) {
+        occur++;
+        const snippet = txt.substring(
+          Math.max(0, idx - 40),
+          Math.min(txt.length, idx + normalizedQuery.length + 40)
+        );
+        chunkHits.push({
+          href: book.spine.spineItems[i]?.href,
+          cfi: book.spine.spineItems[i]?.cfiBase,
+          snippet,
+        });
+        offset = idx + normalizedQuery.length;
+      }
+      if (occur > 0) {
+        console.log(`[SEARCH] [manual-indexOf] ${occur} hit(s) in chapter ${i} (${book.spine.spineItems[i]?.href})`);
+        manualResults = manualResults.concat(chunkHits.map(h => ({
+          ...h,
+          method: "indexOf",
+          i,
+        })));
+      }
+    }
+    if (results.length === 0 && manualResults.length > 0) {
+      // If Fuse missed everything but direct search hits, use those
+      console.warn("[SEARCH] Fuse.js found nothing; using indexOf fallback results only");
+      setSearchResults(manualResults);
+    } else if (results.length > 0) {
+      setSearchResults(results.concat(manualResults));
+    } else {
+      console.warn(`[SEARCH] No results at all for query '${normalizedQuery}'`);
+      setSearchResults([]);
+    }
   }
 
   // PUBLIC_INTERFACE
@@ -620,18 +730,31 @@ function App() {
               {/* Search results overlay */}
               {(searchQuery && searchResults.length > 0) && (
                 <div className="search-results">
-                  <div className="search-results-title">
-                    {searchResults.length} result{searchResults.length > 1 ? "s" : ""} for "<b>{searchQuery}</b>"
-                  </div>
-                  <ul className="search-results-list">
-                    {searchResults.map((r, i) => (
-                      <li key={r.cfi + i}>
-                        <button onClick={() => handleGoToSearchResult(r)}>
-                          ...{r.snippet?.replaceAll("\n", " ")}...
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                  {/* DEBUG UI: Special info if results contain our debug marker */}
+                  {searchResults[0]?.snippet && searchResults[0].snippet.startsWith("[DEBUG]") ? (
+                    <pre style={{ fontSize: "0.87em", color: "#757" }}>{searchResults[0].snippet}</pre>
+                  ) : (
+                    <>
+                      <div className="search-results-title">
+                        {searchResults.length} result{searchResults.length > 1 ? "s" : ""} for "<b>{searchQuery}</b>"
+                      </div>
+                      <ul className="search-results-list">
+                        {searchResults.map((r, i) => (
+                          <li key={(r.cfi||"") + (r.href || "") + i}>
+                            <button onClick={() => handleGoToSearchResult(r)}>
+                              {/* Surface method for debug */}
+                              {r.method && (
+                                <span style={{ fontSize: "0.8em", color: "#999", marginRight: 3 }}>
+                                  [{r.method}]
+                                </span>
+                              )}
+                              ...{r.snippet?.replaceAll("\n", " ")}...
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
                 </div>
               )}
               {(searchQuery && searchResults.length === 0) && (
