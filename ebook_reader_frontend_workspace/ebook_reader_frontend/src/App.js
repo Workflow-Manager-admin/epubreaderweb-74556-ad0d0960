@@ -253,26 +253,56 @@ function App() {
     setSearchResults([]);
     if (!book || !query) return;
     const results = [];
-    // We use spine items instead of chapters for more reliable searching
+    const normalizedQuery = query.trim().toLowerCase();
+    // Make sure all spineItems are searched and text extraction respects async logic
     for (let i = 0; i < book.spine.spineItems.length; ++i) {
       const spineItem = book.spine.spineItems[i];
+      let text = "";
       try {
-        const text = await spineItem.load(book.load.bind(book)).then(res => spineItem.contents.text()).then(text => {
-          spineItem.unload();
-          return text;
-        });
-        if (text && text.toLowerCase().includes(query.toLowerCase())) {
-          // Simple snippet context
-          const matchIdx = text.toLowerCase().indexOf(query.toLowerCase());
-          const context = text.substring(Math.max(0, matchIdx - 40), matchIdx + query.length + 40);
+        // Load spine item and get raw HTML, then strip HTML tags to make searching more robust
+        await spineItem.load(book.load.bind(book));
+        let raw = "";
+        try {
+          raw = await spineItem.contents.text();
+        } catch {
+          // In case .contents.text() fails, fallback to .contents.documentElement.textContent
+          if (
+            spineItem.contents &&
+            spineItem.contents.document &&
+            spineItem.contents.document.documentElement
+          ) {
+            raw = spineItem.contents.document.documentElement.textContent || "";
+          }
+        }
+        text = (typeof raw === "string" ? raw : "").replace(/<[^>]+>/g, " ");
+        // Search all occurrences, not just first
+        let idx = 0;
+        let offset = 0;
+        let found = false;
+        while (
+          (idx = text.toLowerCase().indexOf(normalizedQuery, offset)) !== -1
+        ) {
+          found = true;
+          // Provide snippet (show some context around match)
+          const snippet = text.substring(
+            Math.max(0, idx - 40),
+            Math.min(text.length, idx + normalizedQuery.length + 40)
+          );
           results.push({
             i,
             href: spineItem.href,
-            cfi: spineItem.cfiBase, // We'll best effort display to href instead of cfi for simplicity
-            snippet: context,
+            // Included cfi of this location
+            cfi: spineItem.cfiBase,
+            snippet,
           });
+          offset = idx + normalizedQuery.length;
         }
-      } catch { /* Skip errors */ }
+        spineItem.unload();
+      } catch (e) {
+        // Ensure the spine is unloaded on error too
+        try { spineItem.unload(); } catch {}
+        continue; // skip this spineItem on error loading/extracting
+      }
     }
     setSearchResults(results);
   }
