@@ -60,8 +60,20 @@ function App() {
 
   // Initialize EPUB rendering when book is loaded
   useEffect(() => {
+    // Cleanup previous rendition before rendering a new book
+    let isMounted = true;
+    if (rendition) {
+      try {
+        rendition.destroy && rendition.destroy();
+      } catch {}
+      setRendition(null);
+    }
     if (book && mainAreaRef.current) {
-      const r = book.renderTo(mainAreaRef.current, {
+      const area = mainAreaRef.current;
+      // Defensive: Ensure mainAreaRef.current exists in DOM before calling renderTo
+      if (!area.parentNode) return;
+
+      const r = book.renderTo(area, {
         width: "100%",
         height: "100%",
         flow: "paginated",
@@ -84,12 +96,14 @@ function App() {
 
       r.themes.fontSize(`${fontSize * 100}%`);
       r.hooks.content.register(function(contents) {
+        if (!contents.document.body) return;
         contents.document.body.style.background = "var(--bg-primary)";
         contents.document.body.style.color = "var(--text-primary)";
       });
 
       // Handle location change for navigation, bookmarks, analytics
       r.on("relocated", (location) => {
+        if (!isMounted) return;
         setCurrentLoc(location.start.cfi);
         setCurrentChapter(
           (book.navigation && book.navigation.toc && book.navigation.toc.find((item) =>
@@ -106,7 +120,16 @@ function App() {
         r.display();
       }
     }
-  }, [book]); // eslint-disable-line
+    return () => {
+      isMounted = false;
+      if (rendition) {
+        try {
+          rendition.destroy && rendition.destroy();
+        } catch {}
+      }
+    };
+  // eslint-disable-next-line
+  }, [book]); 
 
   // Load TOC when book loads
   useEffect(() => {
