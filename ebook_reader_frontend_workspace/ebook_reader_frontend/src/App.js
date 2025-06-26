@@ -260,14 +260,15 @@ function App() {
    */
   async function handleSearch(query) {
     setSearchQuery(query);
-    // Always clear search results at new query
     setSearchResults([]);
 
-    // If the query is fully empty, forcibly clear searchResults from UI, including edge cases
+    // 1: If input is empty, forcibly clear results and exit
     if (!query || query.trim() === "") {
       setSearchResults([]);
       return;
     }
+
+    // 2: Defensive—if no book loaded, display info message but do NOT allow phantom/stale/fake results
     if (!book || typeof book !== "object") {
       console.log("[SEARCH] Book is missing or query attempted with no book loaded");
       setSearchResults([
@@ -276,7 +277,7 @@ function App() {
       return;
     }
 
-    // Defensive: Check for valid EPUB spine items
+    // 3: Ensure spineItems is a valid, present array
     let spineItems = [];
     try {
       if (book.spine && Array.isArray(book.spine.spineItems)) {
@@ -285,44 +286,36 @@ function App() {
     } catch {}
     if (!spineItems.length) {
       console.warn("[SEARCH] No spine items loaded in book.");
-      setSearchResults([{ snippet: "[DEBUG] No book spine items loaded." }]);
+      setSearchResults([{ snippet: "[INFO] No book content available (no chapters detected)." }]);
       return;
     }
 
+    // 4: Build normalized query for matching
     const normalizedQuery = query.trim().toLowerCase();
-    const results = [];
 
-    // Loop over all chapters/sections in the EPUB
+    // 5: Extract chapter text, one chunk per spine
     let extractedChunks = [];
     let skippedSpineSections = [];
     let spineChunkMeta = [];
     let allSpineRaw = [];
+
     for (let i = 0; i < spineItems.length; ++i) {
       const spineItem = spineItems[i];
-      let chapterText = "";
-      let extracted = false;
       let extractionError = null;
+      let extracted = false;
+      let chapterText = "";
 
       try {
-        // Defensive: Safely load only if method and book context exist
-        if (!spineItem || typeof spineItem.load !== "function") {
-          throw new Error("Spine item is missing or load() not callable");
-        }
-        // Defensive for possible undefined book context on epubjs
+        if (!spineItem || typeof spineItem.load !== "function") throw new Error("Spine item is missing or load() not callable");
         await spineItem.load(book && book.load ? book.load.bind(book) : undefined);
 
         let raw = "";
-
-        // Try .contents.text() first
         try {
           if (spineItem.contents && typeof spineItem.contents.text === "function") {
             raw = await spineItem.contents.text();
             extracted = true;
-            // Debug info
-            // console.log(`[SEARCH][${i}] .contents.text() success (len=${(raw || "").length})`);
           }
         } catch (innerErr) {
-          // If fails, fallback to raw DOM content
           if (
             spineItem.contents &&
             spineItem.contents.document &&
@@ -331,14 +324,11 @@ function App() {
             raw = spineItem.contents.document.documentElement.textContent || "";
             if (raw && raw.length > 0) {
               extracted = true;
-              // console.warn(`[SEARCH][${i}] .documentElement.textContent fallback success (len=${raw.length})`);
             }
           } else {
             extractionError = innerErr;
           }
         }
-
-        // If all extraction fails, throw
         if (!extracted || !raw) throw new Error("Could not extract text");
 
         allSpineRaw.push((raw || "").slice(0, 220));
@@ -346,6 +336,7 @@ function App() {
         if (!chapterText || chapterText.trim().length === 0) {
           throw new Error("Extracted text is empty");
         }
+
         extractedChunks.push({
           text: chapterText,
           i,
@@ -361,16 +352,18 @@ function App() {
           error: (e && e.message) || (extractionError && extractionError.message) || "Unknown error"
         });
         spineChunkMeta.push({ index: i, href: spineItem?.href, len: "ERROR" });
-        // Log only in debug; production, avoid console.error to reduce console clutter.
-        // console.error(`[SEARCH][${i}] Error extracting '${spineItem?.href}':`, e);
       } finally {
-        // Always try to unload resources for this chapter
         try { await spineItem?.unload?.(); } catch {}
       }
     }
 
-    // [DEBUG] User can trigger debug view
-    if (normalizedQuery === "!!debug" || normalizedQuery.startsWith("!!debug")) {
+    // DEBUG: Show snapshot of what will actually be searched
+    console.log("[SEARCH][DEBUG] At search time, extractedChunks.length =", extractedChunks.length);
+    console.log("[SEARCH][DEBUG] extractedChunks (sample):", extractedChunks.slice(0, 2));
+    if (extractedChunks.length === 0) console.warn("[SEARCH][DEBUG] No valid extracted text. Skipped/errored spineItems:", skippedSpineSections);
+
+    // Dev/debug trigger—show chunks/skipped
+    if (normalizedQuery.startsWith("!!debug")) {
       setSearchResults([
         {
           snippet:
@@ -398,18 +391,13 @@ function App() {
       return;
     }
 
-    // Build status summary for UI feedback—always display at top
-    const summaryMsg = `[INFO] Indexed ${extractedChunks.length}/${spineItems.length} chapters for search.`
-      + (skippedSpineSections.length > 0
+    // UI feedback summary, always display
+    const infoSummary =
+      `[INFO] Indexed ${extractedChunks.length}/${spineItems.length} chapters for search.` +
+      (skippedSpineSections.length > 0
         ? ` Skipped ${skippedSpineSections.length} chapter${skippedSpineSections.length === 1 ? '' : 's'} due to extraction error.`
         : "");
-
-    console.log(summaryMsg);
-    if (skippedSpineSections.length > 0) {
-      console.warn("[SEARCH] Skipped spine items:", skippedSpineSections);
-    }
-
-    let feedbackItems = [{ snippet: summaryMsg }];
+    let feedbackItems = [{ snippet: infoSummary }];
     if (skippedSpineSections.length > 0) {
       feedbackItems.push({
         snippet:
@@ -422,9 +410,8 @@ function App() {
             .join("\n"),
       });
     }
-
+    // 6: If we failed to extract ANY text (index = 0): NO results, NO placeholders, only info/warning
     if (extractedChunks.length === 0) {
-      // Guarantee: No "phantom" results, only summary and error
       setSearchResults([
         ...feedbackItems,
         { snippet: "[SEARCH ERROR] Could not extract text from any book sections. Unable to search contents." }
@@ -432,7 +419,7 @@ function App() {
       return;
     }
 
-    // [FUSE.JS] Index extracted content for fuzzy search
+    // 7: Build true search doc set. ONLY these are valid input for Fuse/manual search.
     const docs = extractedChunks.map((chunk) => ({
       index: chunk.i,
       text: chunk.text,
@@ -441,16 +428,11 @@ function App() {
       label: chunk.label,
     }));
 
-    // SAFETY: If docs is empty, do NOT attempt search (should be handled above, but keep check)
-    if (docs.length === 0) {
-      setSearchResults([
-        ...feedbackItems,
-        { snippet: "[SEARCH ERROR] Zero document chunks available for searching. No results." }
-      ]);
-      return;
-    }
+    // Log explicitly the full array of searchable text
+    console.log("[SEARCH][DEBUG] Searchable text array for Fuse/manual search, length =", docs.length, docs);
 
-    let fuseResults = [];
+    // 8: FUSE SEARCH. Run only if docs.length > 0 (should always be true at this point)
+    let fuseResults = [], results = [];
     try {
       const fuse = new Fuse(docs, {
         keys: ["text"],
@@ -467,7 +449,6 @@ function App() {
       return;
     }
 
-    // Format Fuse results for output UI
     for (const hit of fuseResults) {
       let snippet = "";
       if (hit.matches && hit.matches[0]?.indices?.[0]) {
@@ -484,7 +465,7 @@ function App() {
       });
     }
 
-    // [Manual indexOf] Add direct substring search in case Fuse misses
+    // 9: Manual fallback searching (indexOf), still using ONLY extractedChunks
     let manualResults = [];
     for (let j = 0; j < extractedChunks.length; ++j) {
       const chunk = extractedChunks[j];
@@ -521,15 +502,7 @@ function App() {
       }
     }
 
-    // Provide results + feedback to UI (even if empty, always show summary)
-    // If extractedChunks.length was zero, don't trust results (double guard; should never hit here)
-    if (extractedChunks.length === 0) {
-      setSearchResults([
-        ...feedbackItems,
-        { snippet: "[SEARCH ERROR] Internal logic error: results found when no chapters were indexed for searching." }
-      ]);
-      return;
-    }
+    // 10: Results/feedback for UI—never return fake/phantom results
     if (results.length === 0 && manualResults.length === 0) {
       setSearchResults([
         ...feedbackItems,
