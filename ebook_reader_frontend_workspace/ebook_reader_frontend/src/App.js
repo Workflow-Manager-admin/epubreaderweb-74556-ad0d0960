@@ -196,8 +196,13 @@ function App() {
       reader.onload = function(e) {
         const bookInstance = ePub(e.target.result, { openAs: "binary" });
         setBook(bookInstance);
-        setSearchResults([]);
+        setSearchResults([]); // clear previous search state
         setSearchQuery("");
+        // Reset UI state that could be stale
+        setCurrentLoc("");
+        setCurrentChapter("");
+        // Optional: log upload event
+        console.info("[UPLOAD] Loaded new EPUB:", file.name);
       };
       reader.readAsArrayBuffer(file);
     } else {
@@ -255,9 +260,19 @@ function App() {
    */
   async function handleSearch(query) {
     setSearchQuery(query);
+    // Always clear search results at new query
     setSearchResults([]);
-    if (!book || typeof book !== "object" || !query) {
-      console.log("[SEARCH] Book is missing or query is empty");
+
+    // If the query is fully empty, forcibly clear searchResults from UI, including edge cases
+    if (!query || query.trim() === "") {
+      setSearchResults([]);
+      return;
+    }
+    if (!book || typeof book !== "object") {
+      console.log("[SEARCH] Book is missing or query attempted with no book loaded");
+      setSearchResults([
+        { snippet: "[INFO] No ebook loaded. Please upload an EPUB file to search." }
+      ]);
       return;
     }
 
@@ -409,9 +424,10 @@ function App() {
     }
 
     if (extractedChunks.length === 0) {
+      // Guarantee: No "phantom" results, only summary and error
       setSearchResults([
         ...feedbackItems,
-        { snippet: "[SEARCH ERROR] Could not extract text from any book sections. Unable to search contents." },
+        { snippet: "[SEARCH ERROR] Could not extract text from any book sections. Unable to search contents." }
       ]);
       return;
     }
@@ -425,23 +441,30 @@ function App() {
       label: chunk.label,
     }));
 
+    // SAFETY: If docs is empty, do NOT attempt search (should be handled above, but keep check)
+    if (docs.length === 0) {
+      setSearchResults([
+        ...feedbackItems,
+        { snippet: "[SEARCH ERROR] Zero document chunks available for searching. No results." }
+      ]);
+      return;
+    }
+
     let fuseResults = [];
-    if (docs.length > 0) {
-      try {
-        const fuse = new Fuse(docs, {
-          keys: ["text"],
-          includeMatches: true,
-          minMatchCharLength: 3,
-          threshold: 0.3,
-          useExtendedSearch: true,
-        });
-        fuseResults = fuse.search(query || "");
-        console.log("[SEARCH] FUSE found", fuseResults.length, "results. Sample:", fuseResults.slice(0, 3));
-      } catch (fuseErr) {
-        feedbackItems.push({ snippet: "[SEARCH ERROR] Fuse.js search failed: " + fuseErr.message });
-        setSearchResults(feedbackItems);
-        return;
-      }
+    try {
+      const fuse = new Fuse(docs, {
+        keys: ["text"],
+        includeMatches: true,
+        minMatchCharLength: 3,
+        threshold: 0.3,
+        useExtendedSearch: true,
+      });
+      fuseResults = fuse.search(query || "");
+      console.log("[SEARCH] FUSE found", fuseResults.length, "results. Sample:", fuseResults.slice(0, 3));
+    } catch (fuseErr) {
+      feedbackItems.push({ snippet: "[SEARCH ERROR] Fuse.js search failed: " + fuseErr.message });
+      setSearchResults(feedbackItems);
+      return;
     }
 
     // Format Fuse results for output UI
@@ -499,6 +522,14 @@ function App() {
     }
 
     // Provide results + feedback to UI (even if empty, always show summary)
+    // If extractedChunks.length was zero, don't trust results (double guard; should never hit here)
+    if (extractedChunks.length === 0) {
+      setSearchResults([
+        ...feedbackItems,
+        { snippet: "[SEARCH ERROR] Internal logic error: results found when no chapters were indexed for searching." }
+      ]);
+      return;
+    }
     if (results.length === 0 && manualResults.length === 0) {
       setSearchResults([
         ...feedbackItems,
@@ -530,6 +561,8 @@ function App() {
     setFileName("");
     setSearchResults([]);
     setSearchQuery("");
+    // Defensive: log book clear
+    console.info("[RESET] Cleared book and UI state.");
   }
 
   // Add document-level keyboard and click support for paging
