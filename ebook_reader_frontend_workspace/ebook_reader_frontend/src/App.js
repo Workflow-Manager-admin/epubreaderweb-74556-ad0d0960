@@ -298,12 +298,13 @@ function App() {
 
         let raw = "";
 
-        // First, attempt epubjs .contents.text() method for section text
+        // Try .contents.text() first
         try {
           if (spineItem.contents && typeof spineItem.contents.text === "function") {
             raw = await spineItem.contents.text();
             extracted = true;
-            console.log(`[SEARCH][${i}] .contents.text() success (len=${(raw||"").length})`);
+            // Debug info
+            // console.log(`[SEARCH][${i}] .contents.text() success (len=${(raw || "").length})`);
           }
         } catch (innerErr) {
           // If fails, fallback to raw DOM content
@@ -315,7 +316,7 @@ function App() {
             raw = spineItem.contents.document.documentElement.textContent || "";
             if (raw && raw.length > 0) {
               extracted = true;
-              console.warn(`[SEARCH][${i}] .documentElement.textContent fallback success (len=${raw.length})`);
+              // console.warn(`[SEARCH][${i}] .documentElement.textContent fallback success (len=${raw.length})`);
             }
           } else {
             extractionError = innerErr;
@@ -345,7 +346,8 @@ function App() {
           error: (e && e.message) || (extractionError && extractionError.message) || "Unknown error"
         });
         spineChunkMeta.push({ index: i, href: spineItem?.href, len: "ERROR" });
-        console.error(`[SEARCH][${i}] Error extracting '${spineItem?.href}':`, e);
+        // Log only in debug; production, avoid console.error to reduce console clutter.
+        // console.error(`[SEARCH][${i}] Error extracting '${spineItem?.href}':`, e);
       } finally {
         // Always try to unload resources for this chapter
         try { await spineItem?.unload?.(); } catch {}
