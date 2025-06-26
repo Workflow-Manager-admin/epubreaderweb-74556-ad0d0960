@@ -381,33 +381,18 @@ function App() {
       return;
     }
 
-    // Build status summary for UI feedback
+    // Build status summary for UI feedback—always display at top
     const summaryMsg = `[INFO] Indexed ${extractedChunks.length}/${spineItems.length} chapters for search.`
       + (skippedSpineSections.length > 0
         ? ` Skipped ${skippedSpineSections.length} chapter${skippedSpineSections.length === 1 ? '' : 's'} due to extraction error.`
         : "");
 
-    let feedbackItems = [];
-    if (extractedChunks.length === 0) {
-      setSearchResults([
-        { snippet: "[SEARCH ERROR] Could not extract text from any book sections. Unable to search contents." },
-        ...(skippedSpineSections.length > 0
-          ? [{
-              snippet:
-                `[INFO] Skipped ${skippedSpineSections.length} section(s) due to extraction errors:\n` +
-                skippedSpineSections.map(
-                  (s) =>
-                    `  [${s.index}] ${s.href || "[unknown]"}: ${
-                      s.error || "Unknown error"
-                    }`
-                )
-                .join("\n"),
-            }]
-          : []),
-      ]);
-      return;
+    console.log(summaryMsg);
+    if (skippedSpineSections.length > 0) {
+      console.warn("[SEARCH] Skipped spine items:", skippedSpineSections);
     }
-    feedbackItems.push({ snippet: summaryMsg });
+
+    let feedbackItems = [{ snippet: summaryMsg }];
     if (skippedSpineSections.length > 0) {
       feedbackItems.push({
         snippet:
@@ -419,6 +404,14 @@ function App() {
             )
             .join("\n"),
       });
+    }
+
+    if (extractedChunks.length === 0) {
+      setSearchResults([
+        ...feedbackItems,
+        { snippet: "[SEARCH ERROR] Could not extract text from any book sections. Unable to search contents." },
+      ]);
+      return;
     }
 
     // [FUSE.JS] Index extracted content for fuzzy search
@@ -787,22 +780,20 @@ function App() {
               {/* Search results overlay */}
               {(searchQuery && searchResults.length > 0) && (
                 <div className="search-results">
-                  {/* DEBUG UI: Special info if results contain our debug marker */}
-                  {searchResults[0]?.snippet && searchResults[0].snippet.startsWith("[DEBUG]") ? (
-                    <pre style={{ fontSize: "0.87em", color: "#757" }}>{searchResults[0].snippet}</pre>
-                  ) : (
+                  {/* Status/info/debug is always displayed as a summary at the top */}
+                  {(searchResults[0]?.snippet?.startsWith("[DEBUG]") || searchResults[0]?.snippet?.startsWith("[INFO]") || searchResults[0]?.snippet?.startsWith("[SEARCH ERROR]")) && (
+                    <pre style={{ fontSize: "0.89em", color: "#b57a00", background: "none", border: "none", margin: "0 0 7px 0", whiteSpace: "pre-wrap" }}>
+                      {searchResults[0].snippet}
+                    </pre>
+                  )}
+                  {!searchResults[0]?.snippet?.startsWith("[DEBUG]") && (
                     <>
-                      {searchResults[0]?.snippet?.startsWith("[INFO]") && (
-                        <div style={{ color: "#b57a00", padding: "5px 0", fontSize: "0.98em" }}>
-                          {searchResults[0].snippet}
-                        </div>
-                      )}
                       <div className="search-results-title">
                         {searchResults.length} result{searchResults.length > 1 ? "s" : ""} for "<b>{searchQuery}</b>"
                       </div>
                       <ul className="search-results-list">
                         {searchResults.map((r, i) =>
-                          r.snippet && r.snippet.startsWith("[INFO]") ? null : (
+                          r.snippet && (r.snippet.startsWith("[INFO]") || r.snippet.startsWith("[SEARCH ERROR]")) ? null : (
                             <li key={(r.cfi||"") + (r.href || "") + i}>
                               <button onClick={() => handleGoToSearchResult(r)}>
                                 {/* Surface method for debug */}
